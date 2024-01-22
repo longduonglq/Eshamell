@@ -1,0 +1,8 @@
+[
+{
+  "directory": "/Users/drp/Eshamell/build",
+  "command": "/Library/Developer/CommandLineTools/usr/bin/c++  -I/usr/local/include -I/Users/drp/Eshamell/compile-time-regular-expressions/include -stdlib=libc++  -O0 -g -std=gnu++20 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX14.2.sdk -o CMakeFiles/eshamell_tests.dir/main.cpp.o -c /Users/drp/Eshamell/main.cpp",
+  "file": "/Users/drp/Eshamell/main.cpp",
+  "output": "CMakeFiles/eshamell_tests.dir/main.cpp.o"
+}
+]

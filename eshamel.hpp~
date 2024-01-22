@@ -1,0 +1,15 @@
+#pragma once
+
+namespace Eshamel
+{
+	template< char...cs >  struct MosesString { };
+
+	template< class...Ts > struct Doc { };
+	template< class...Ts > struct Node { };
+
+namespace details	
+{
+	
+} // details
+
+} // Eshamel

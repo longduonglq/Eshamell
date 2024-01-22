@@ -1,0 +1,302 @@
+#include <cstring>
+#include <iostream>
+#include <string>
+#include <variant>
+#include <strstream>
+
+#include "boost/xpressive/regex_algorithms.hpp"
+#include "boost/xpressive/regex_primitives.hpp"
+#include "boost/xpressive/xpressive_fwd.hpp"
+#include "eshamel.hpp"
+
+#include <boost/static_string.hpp>
+#include <boost/fusion/support/pair.hpp>
+#include <boost/fusion/sequence.hpp>
+#include <boost/fusion/container.hpp>
+#include <boost/xpressive/xpressive.hpp>
+#include <boost/outcome.hpp>
+#include <boost/exception/all.hpp>
+#include <boost/format.hpp>
+#include <boost/lexical_cast.hpp>
+
+using namespace boost;
+using namespace boost::xpressive;
+
+#define DECL_IDENT(ident) struct ident { constexpr static const std::string_view as_str = #ident; };
+
+#define DECL_FIELD(ty, ident) boost::fusion::pair< ident, ty > 
+#define BEGIN_STRUCT(ident) using ident = boost::fusion::map< 
+#define END_STRUCT() >;
+
+DECL_IDENT(X);
+DECL_IDENT(Y);
+DECL_IDENT(_IsCompliant);
+
+BEGIN_STRUCT(Point)
+DECL_FIELD(double, X) ,
+DECL_FIELD(double, Y) ,
+DECL_FIELD(bool, _IsCompliant)
+END_STRUCT();
+
+template< class...T > struct Tuple
+{
+	constexpr static const size_t N = sizeof...(T);
+};
+
+#define DECL_TAG(ident) struct ident { constexpr static const std::string_view as_str = #ident; }
+#define DECL_TAG_WITH_ATTRS(ident, ...) struct ident {\
+	constexpr static const std::string_view as_str = #ident;\
+	using Attrs = Tuple< __VA_ARGS__ >; \
+}
+
+// DECL_TAG(ProtocolStarting);
+
+
+template< class Sym, class ValT >
+struct Attribute : public fusion::pair< Sym, ValT >
+{
+};
+
+template< class Sym, class ValT >
+struct OptionalAttribute : public Attribute< Sym, ValT > 
+{
+};
+
+DECL_IDENT(height);
+DECL_IDENT(auditable);
+DECL_IDENT(skipped);
+
+// a macro that generates metafunctions of the form HasX<T> which computes whether type T has an inner type named "X".
+#define HAS_X(inner) \
+template< class X, class E = void > struct _Has_##inner : false_type { };\
+template< class X > struct _Has_##inner< X, void_t<typename X::inner> > : true_type { };\
+template< class X > struct _Has_##inner< X, void_t<decltype(X::inner)> > : true_type { }; \
+template< class X > using Has_##inner##T = typename _Has_##inner<X>::type;\
+template< class X > using Has_##inner##V = typename _Has_##inner<X>::value;
+
+HAS_X(Attrs);
+HAS_X(Childs);
+HAS_X(ChildrenAreOrdered);
+HAS_X(AttributesAreOrdered);
+HAS_X(as_str);
+
+template< class N > concept IsNode = Has_as_strT< N >::value;
+
+struct ProtocolStarting
+{
+	constexpr static const std::string_view as_str = "ProtocolStarting";
+	using Attrs = fusion::map<
+		Attribute< height, double >,
+		Attribute< auditable, bool >,
+		OptionalAttribute< skipped, bool >
+	> ;
+	Attrs attrs;
+	using ChildrenAreOrdered = void ;
+	using AttributesAreOrdered = void;
+	using Childs = fusion::vector<
+	> ;
+	Childs childs;
+};
+
+struct ProtocolStop
+{
+	constexpr static const std::string_view as_str = "ProtocolStop";
+	using Attrs = fusion::map<
+		Attribute< height, double >,
+		Attribute< auditable, bool >,
+		OptionalAttribute< skipped, bool >
+	> ;
+	Attrs attrs;
+	using ChildrenAreOrdered = void ;
+	using AttributesAreOrdered = void;
+	using Childs = fusion::vector<
+		ProtocolStarting
+	> ;
+	Childs childs;
+};
+
+// HasChildrenAreOrderedT<ProtocolStop>::type a;
+
+struct Marshal
+{
+public:
+	template< class S >
+	static std::string marshal(S const& s)
+	{
+		std::stringstream ss;
+		marsh_node_impl(ss, s);
+		return ss.str();
+	}
+
+private:
+
+	template< class S >
+	static void marsh_node_impl(std::stringstream& ss, S const& s)
+	{
+		static_assert(Has_as_strT<S>::value, "This might not be a node since it lacks `as_str`.");
+		ss << "<" << S::as_str ;
+		if constexpr (Has_AttrsT<S>::value)
+		{
+			boost::fusion::for_each(
+				s.attrs,
+				[&]< class A >(A const& attr) {
+					ss << " " << A::first_type::as_str
+					   << "=" << "\"" << attr.second << "\"";
+				});
+		}
+		ss << ">";
+		if constexpr (Has_ChildsT<S>::value)
+		{
+			boost::fusion::for_each(
+				s.childs,
+				[&]< class C >(C const& child) {
+					Marshal::marsh_node_impl< C >(ss, child);
+				});
+		}
+		ss << "<\\" << S::as_str << ">" ;
+	}
+};
+
+template< class T > struct IsOptional : false_type { };
+template< class T > struct IsOptional< std::optional<T> > : true_type { };
+
+template< class S >
+struct Unmarshal
+{
+public:
+	static S unmarshal(std::string_view sv)
+	{
+		S s;
+		unmarshal_node_impl(s, sv);
+		if constexpr (Has_AttrsT<S>::value)
+		{
+			unmarshal_attrs_impl(s.attrs, sv);
+		}
+		if constexpr (Has_ChildsT<S>::value)
+		{
+			unmarshal_node_impl(s.childs, sv);
+		}
+		return s;
+	}
+
+private:
+
+	static void unmarshal_node_impl(S& s, std::string_view& sv)
+	{
+		mark_tag node_ident(1), attr_assignments(2);
+		cregex node_start_tag = as_xpr('<')
+			>> (node_ident= (alpha >> *set[ alnum | '-' | '.' ])) ;
+	    cregex node_end_tag = as_xpr("</") >> node_ident >> '>';
+
+		cmatch what;
+		if (regex_search( sv, what, node_start_tag ))
+		{
+			assert(0 == what[node_ident].compare(S::as_str.begin()));
+			auto attrs_str = std::string_view( what[node_ident].second, sv.end() );
+			unmarshal_attrs_impl(s.attrs, attrs_str);
+			// assume matching '>' is present
+			attrs_str = attrs_str.substr(1 + attrs_str.find('>'));
+			assert(attrs_str.begin() <= sv.end());
+			sv = std::string_view(attrs_str.begin(), sv.end());
+
+			std::cout << "LD: " << sv << std::endl;
+			fusion::for_each(s.childs, [&]<>());
+			// Unmarshal< S::Childs >
+
+			// cmatch node_end_match;
+			// if (regex_search( sv, node_end_match, node_end_tag ))
+			// {
+			// 	sv = std::string_view( node_end_match[0].first, node_end_match[0].second );
+			// 	std::cout << "LD: " << sv << std::endl;
+			// 	// unmarshal_node_impl(s, sv);
+			// }
+		}
+		else return ; 
+	}
+
+	template< class Vec >
+	static void unmarshal_attrs_impl(Vec& attrs, std::string_view& sv)
+		requires (Has_AttrsT< S >::value && Has_AttributesAreOrderedT< S >::value) 
+	{
+		mark_tag attr_ident(1), attr_value(2);
+		cregex attr_assign_re 
+			= (attr_ident= (alpha >> *set[ alnum | '-' | '.' ]))
+			>> '='
+			>> '\"' >> (attr_value= ~(set= '\"')) >> '\"';
+
+		cregex_iterator cur( sv.begin(), sv.end(), attr_assign_re ), end;
+		fusion::for_each(attrs, [&]< class A >(A& attr) {
+				if ( cur != end )
+				{
+					auto ident = (*cur)[attr_ident];
+					if (0 == ident.compare(A::first_type::as_str.data()))
+						attr.second = boost::lexical_cast<typename A::second_type>((*cur)[attr_value]);
+					else
+						if constexpr (!IsOptional< typename A::second_type >::value)
+						{
+							assert(false); // TODO: throw exception or sum'.
+						}
+
+					sv = std::string_view((*cur)[0].second, sv.end());
+					// std::cout << "LD: " << sv << std::endl;
+					++cur;
+				}
+			});
+	}
+
+	template< class Vec >
+	static void unmarshal_attrs_impl(Vec& attrs, std::string_view& sv)
+		requires (Has_AttrsT< S >::value && !Has_AttributesAreOrderedT< S >::value)
+	{
+	}
+
+	template< class Vec >
+	static void unmarshal_node_impl(Vec& childs, std::string_view& sv)
+		requires (IsNode< S > && Has_ChildrenAreOrderedT< S >::value)
+	{
+		// fusion::for_each(childs, [&]< class N >(N& child_node) {
+		// 		std::cout << N::as_str << std::endl;
+		// 		child_node = Unmarshal< N >::unmarshal(sv);
+		// 	});
+	}
+};
+
+template< class...S >
+struct UniversalUnmarshaller
+{
+public:
+	using V = std::variant< S... >;
+	V unmarshal(std::string_view sv)
+	{
+	}
+
+protected:
+	struct UnmarshalImpl
+	{
+		template< class T >
+		void operator()(T& t) const
+		{
+			std::cout << typeid(typename T::second_type).name()
+					  << " "
+					  << boost::fusion::result_of::first<T>::type::as_str
+					  << " "
+					  << t.second
+					  << std::endl;
+		}
+	};
+};
+
+int main()
+{
+	using namespace boost;
+	std::cout << "Hello World" << std::endl;
+	// auto p = Point(5, 5, true);
+	// fusion::for_each(p, UniversalUnmarshaller<>::UnmarshalImpl());
+	auto m = Marshal();
+	std::cout << Marshal::marshal<ProtocolStop>(ProtocolStop()) << std::endl;
+	auto s = Marshal::marshal<ProtocolStop>(ProtocolStop());
+
+	// auto um = Unmarshal<ProtocolStop>();
+	Unmarshal<ProtocolStop>::unmarshal(s);
+	return 0;
+}
